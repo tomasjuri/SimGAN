@@ -33,15 +33,15 @@ cache_dir = os.path.join(path, 'cache')
 #
 
 img_width = 55
-img_height = 35
-img_channels = 1
+img_height = 55
+img_channels = 3
 
 #
 # training params
 #
 
 nb_steps = 10000
-batch_size = 512
+batch_size = 256
 k_d = 1  # number of discriminator updates per step
 k_g = 2  # number of generative network updates per step
 log_interval = 100
@@ -69,7 +69,7 @@ def refiner_network(input_image_tensor):
         y = layers.Activation('relu')(y)
         y = layers.Convolution2D(nb_features, nb_kernel_rows, nb_kernel_cols, border_mode='same')(y)
 
-        y = layers.merge([input_features, y], mode='sum')
+        y = layers.merge.Add()([input_features, y])
         return layers.Activation('relu')(y)
 
     # an input image of size w × h is convolved with 3 × 3 filters that output 64 feature maps
@@ -171,15 +171,19 @@ def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=N
     #
     # data generators
     #
-
+    
     datagen = image.ImageDataGenerator(
         preprocessing_function=applications.xception.preprocess_input,
-        dim_ordering='tf')
+        data_format='channels_last',
+        rotation_range=360,
+        horizontal_flip=True,
+        vertical_flip=True)
 
     flow_from_directory_params = {'target_size': (img_height, img_width),
                                   'color_mode': 'grayscale' if img_channels == 1 else 'rgb',
                                   'class_mode': None,
                                   'batch_size': batch_size}
+
 
     synthetic_generator = datagen.flow_from_directory(
         directory=synthesis_eyes_dir,
