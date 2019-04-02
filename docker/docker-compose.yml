@@ -1,0 +1,33 @@
+version: '2.3'
+
+services:
+
+  bash:
+    build:
+      context: ../.
+      dockerfile: ./docker/cpu/Dockerfile
+    ports: ["6006:6006"]
+    image: tj-simgan-cpu
+    command: bash
+    environment:
+      - PYTHONPATH=/usr/src/app
+    volumes:
+      - '/mnt:/mnt'
+      - '/srv:/srv'
+      - '../.:/usr/src/app'
+    shm_size: 24GB
+    network_mode: host
+    ports: ["${TBPORT:-6056}:${TBPORT:-6006}", "${JNPORT:-6059}:${JNPORT:-8888}"]
+
+  bash-gpu:
+    extends:
+      service: bash
+    build:
+      context: ../.
+      dockerfile: ./docker/gpu/Dockerfile
+    image: tj-simgan-gpu
+    runtime: nvidia
+    command: bash
+    network_mode: host
+    ports: ["${TBPORT:-6006}:${TBPORT:-6006}", "${JNPORT:-6069}:${JNPORT:-8888}"]
+  
