@@ -1,5 +1,0 @@
-git+https://github.com/wayaai/deep-learning-utils.git
-git+https://github.com/fchollet/keras.git
-matplotlib
-numpy
-tensorflow

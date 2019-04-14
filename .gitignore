@@ -88,3 +88,6 @@ ENV/
 # Rope project settings
 .ropeproject
 cache/*
+*.h5
+*.png
+docker/ssh/id_rsa
