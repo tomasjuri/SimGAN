@@ -16,94 +16,24 @@ from keras.preprocessing import image
 import numpy as np
 import tensorflow as tf
 
+from config import *
 from dlutils import plot_image_batch_w_labels
-
 from utils.image_history_buffer import ImageHistoryBuffer
+from data_gen import NegGenerator, PosGenerator, Cropper
 
+from model import discriminator_network, refiner_network
 
-#
 # directories
-#
-
+H5 = '/srv/workplace/tjurica/tasks/1544-ANY_defects_detection/pc_dataset/ann_train.h5'
 path = os.path.dirname(os.path.abspath(__file__))
 cache_dir = os.path.join(path, 'cache')
 
-#
-# image dimensions
-#
+c = Cropper(H5, dim=(img_width, img_height), crops_per_img=1000)
+synthetic_generator = NegGenerator(c, batch_size)
+real_generator = PosGenerator(c, batch_size)
+    
 
-img_width = 55
-img_height = 55
-img_channels = 3
-
-#
-# training params
-#
-
-nb_steps = 10000
-batch_size = 256
-k_d = 1  # number of discriminator updates per step
-k_g = 2  # number of generative network updates per step
-log_interval = 100
-
-
-def refiner_network(input_image_tensor):
-    """
-    The refiner network, Rθ, is a residual network (ResNet). It modifies the synthetic image on a pixel level, rather
-    than holistically modifying the image content, preserving the global structure and annotations.
-
-    :param input_image_tensor: Input tensor that corresponds to a synthetic image.
-    :return: Output tensor that corresponds to a refined synthetic image.
-    """
-    def resnet_block(input_features, nb_features=64, nb_kernel_rows=3, nb_kernel_cols=3):
-        """
-        A ResNet block with two `nb_kernel_rows` x `nb_kernel_cols` convolutional layers,
-        each with `nb_features` feature maps.
-
-        See Figure 6 in https://arxiv.org/pdf/1612.07828v1.pdf.
-
-        :param input_features: Input tensor to ResNet block.
-        :return: Output tensor from ResNet block.
-        """
-        y = layers.Convolution2D(nb_features, nb_kernel_rows, nb_kernel_cols, border_mode='same')(input_features)
-        y = layers.Activation('relu')(y)
-        y = layers.Convolution2D(nb_features, nb_kernel_rows, nb_kernel_cols, border_mode='same')(y)
-
-        y = layers.merge.Add()([input_features, y])
-        return layers.Activation('relu')(y)
-
-    # an input image of size w × h is convolved with 3 × 3 filters that output 64 feature maps
-    x = layers.Convolution2D(64, 3, 3, border_mode='same', activation='relu')(input_image_tensor)
-
-    # the output is passed through 4 ResNet blocks
-    for _ in range(4):
-        x = resnet_block(x)
-
-    # the output of the last ResNet block is passed to a 1 × 1 convolutional layer producing 1 feature map
-    # corresponding to the refined synthetic image
-    return layers.Convolution2D(img_channels, 1, 1, border_mode='same', activation='tanh')(x)
-
-
-def discriminator_network(input_image_tensor):
-    """
-    The discriminator network, Dφ, contains 5 convolution layers and 2 max-pooling layers.
-
-    :param input_image_tensor: Input tensor corresponding to an image, either real or refined.
-    :return: Output tensor that corresponds to the probability of whether an image is real or refined.
-    """
-    x = layers.Convolution2D(96, 3, 3, border_mode='same', subsample=(2, 2), activation='relu')(input_image_tensor)
-    x = layers.Convolution2D(64, 3, 3, border_mode='same', subsample=(2, 2), activation='relu')(x)
-    x = layers.MaxPooling2D(pool_size=(3, 3), border_mode='same', strides=(1, 1))(x)
-    x = layers.Convolution2D(32, 3, 3, border_mode='same', subsample=(1, 1), activation='relu')(x)
-    x = layers.Convolution2D(32, 1, 1, border_mode='same', subsample=(1, 1), activation='relu')(x)
-    x = layers.Convolution2D(2, 1, 1, border_mode='same', subsample=(1, 1), activation='relu')(x)
-
-    # here one feature map corresponds to `is_real` and the other to `is_refined`,
-    # and the custom loss function is then `tf.nn.sparse_softmax_cross_entropy_with_logits`
-    return layers.Reshape((-1, 2))(x)
-
-
-def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=None, discriminator_model_path=None):
+def adversarial_training(synthetic_generator, real_generator, refiner_model_path=None, discriminator_model_path=None):
     """Adversarial training of refiner network Rθ and discriminator network Dφ."""
     #
     # define model input and output tensors
@@ -168,32 +98,6 @@ def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=N
     discriminator_model.trainable = False
     combined_model.compile(optimizer=sgd, loss=[self_regularization_loss, local_adversarial_loss])
 
-    #
-    # data generators
-    #
-    
-    datagen = image.ImageDataGenerator(
-        preprocessing_function=applications.xception.preprocess_input,
-        data_format='channels_last',
-        rotation_range=360,
-        horizontal_flip=True,
-        vertical_flip=True)
-
-    flow_from_directory_params = {'target_size': (img_height, img_width),
-                                  'color_mode': 'grayscale' if img_channels == 1 else 'rgb',
-                                  'class_mode': None,
-                                  'batch_size': batch_size}
-
-
-    synthetic_generator = datagen.flow_from_directory(
-        directory=synthesis_eyes_dir,
-        **flow_from_directory_params
-    )
-
-    real_generator = datagen.flow_from_directory(
-        directory=mpii_gaze_dir,
-        **flow_from_directory_params
-    )
 
     def get_image_batch(generator):
         """keras generators may generate an incomplete batch for the last batch"""
@@ -226,7 +130,7 @@ def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=N
 
                 synthetic_image_batch = get_image_batch(synthetic_generator)
                 plot_image_batch_w_labels.plot_batch(
-                    np.concatenate((synthetic_image_batch, refiner_model.predict_on_batch(synthetic_image_batch))),
+                    np.concatenate((synthetic_image_batch[:,:,:,:3], refiner_model.predict_on_batch(synthetic_image_batch)[:,:,:,:3])),
                     os.path.join(cache_dir, figure_name),
                     label_batch=['Synthetic'] * batch_size + ['Refined'] * batch_size)
 
@@ -304,7 +208,7 @@ def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=N
 
             synthetic_image_batch = get_image_batch(synthetic_generator)
             plot_image_batch_w_labels.plot_batch(
-                np.concatenate((synthetic_image_batch, refiner_model.predict_on_batch(synthetic_image_batch))),
+                np.concatenate((synthetic_image_batch[:,:,:,:3], refiner_model.predict_on_batch(synthetic_image_batch)[:,:,:,:3])),
                 os.path.join(cache_dir, figure_name),
                 label_batch=['Synthetic'] * batch_size + ['Refined'] * batch_size)
 
@@ -323,13 +227,10 @@ def adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path=N
             discriminator_model.save(model_checkpoint_base_name.format('discriminator', i))
 
 
-def main(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path, discriminator_model_path):
-    adversarial_training(synthesis_eyes_dir, mpii_gaze_dir, refiner_model_path, discriminator_model_path)
-
+def main():
+    adversarial_training(
+        synthetic_generator, real_generator,
+        refiner_model_path=None, discriminator_model_path=None)
 
 if __name__ == '__main__':
-    # TODO: if pre-trained models are passed in, we don't take the steps they've been trained for into account
-    refiner_model_path = sys.argv[3] if len(sys.argv) >= 4 else None
-    discriminator_model_path = sys.argv[4] if len(sys.argv) >= 5 else None
-
-    main(sys.argv[1], sys.argv[2], refiner_model_path, discriminator_model_path)
+    main()

@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=6 python3.5 sim-gan.py ${SYNT_DIR} ${REAL_DIR}
